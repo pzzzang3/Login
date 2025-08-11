@@ -1,5 +1,4 @@
-﻿using Login.Models;
-using Login.Models.DTOs;
+﻿using Login.Models.DTOs;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -32,14 +31,19 @@ namespace Login.Services
             var user = new ApplicationUser
             {
                 UserName = dto.Email,
-                Email = dto.Email
+                Email = dto.Email,
+                TwoFactorEnabled = false, // Mặc định tắt 2FA
+                FirstName = dto.FullName?.Split(' ').FirstOrDefault(),
+                LastName = dto.FullName?.Contains(' ') == true ?
+                    string.Join(" ", dto.FullName.Split(' ').Skip(1)) : null,
+                PhoneNumber = dto.PhoneNumber
             };
 
             var result = await _userManager.CreateAsync(user, dto.Password);
             return result.Succeeded;
         }
 
-        public async Task<string> LoginAsync(LoginDto dto)
+        public async Task<LoginResponseDto> LoginAsync(LoginDto dto)
         {
             var user = await _userManager.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
             if (user == null)
@@ -50,19 +54,46 @@ namespace Login.Services
             if (!passwordValid)
                 throw new Exception("Email hoặc mật khẩu không đúng.");
 
-            // Nếu 2FA bật
-            if (user.TwoFactorEnabled)
-            {
-                if (string.IsNullOrWhiteSpace(dto.TwoFactorCode))
-                    throw new Exception("Tài khoản đã bật 2FA. Vui lòng nhập mã OTP.");
+            // Cập nhật thời gian đăng nhập cuối
+            user.LastLoginAt = DateTime.UtcNow;
+            await _userManager.UpdateAsync(user);
 
-                // Xác thực mã OTP (Google Authenticator)
-                if (!VerifyOtp(user.TwoFactorSecretKey, dto.TwoFactorCode))
-                    throw new Exception("Mã OTP không hợp lệ.");
+            // Nếu 2FA tắt → trả token luôn
+            if (!user.TwoFactorEnabled)
+            {
+                var token = await GenerateJwtToken(user);
+                return new LoginResponseDto
+                {
+                    Token = token,
+                    RequiresTwoFactor = false,
+                    Message = "Đăng nhập thành công"
+                };
             }
 
-            // Tạo JWT
-            return await GenerateJwtToken(user);
+            // Nếu 2FA bật
+            if (string.IsNullOrWhiteSpace(dto.TwoFactorCode))
+            {
+                return new LoginResponseDto
+                {
+                    RequiresTwoFactor = true,
+                    Message = "Tài khoản đã bật 2FA. Vui lòng nhập mã OTP."
+                };
+            }
+
+            // Xác thực mã OTP
+            if (!VerifyOtp(user.TwoFactorSecretKey, dto.TwoFactorCode))
+            {
+                throw new Exception("Mã OTP không hợp lệ.");
+            }
+
+            // Tạo JWT sau khi xác thực 2FA thành công
+            var jwtToken = await GenerateJwtToken(user);
+            return new LoginResponseDto
+            {
+                Token = jwtToken,
+                RequiresTwoFactor = false,
+                Message = "Đăng nhập thành công"
+            };
         }
 
         public async Task<bool> Enable2FAAsync(string userId, string otpCode)
@@ -82,7 +113,10 @@ namespace Login.Services
             if (!VerifyOtp(user.TwoFactorSecretKey, otpCode))
                 return false;
 
-            await _userManager.SetTwoFactorEnabledAsync(user, true);
+            // Bật 2FA
+            user.TwoFactorEnabled = true;
+            await _userManager.UpdateAsync(user);
+
             return true;
         }
 
@@ -91,10 +125,15 @@ namespace Login.Services
             var user = await _userManager.FindByIdAsync(userId);
             if (user == null) return false;
 
+            // Nếu 2FA chưa bật thì không cần làm gì
+            if (!user.TwoFactorEnabled)
+                return true;
+
             // Phải xác minh OTP trước khi tắt
             if (!VerifyOtp(user.TwoFactorSecretKey, otpCode))
                 return false;
 
+            // Tắt 2FA và xóa secret key
             user.TwoFactorEnabled = false;
             user.TwoFactorSecretKey = null;
             await _userManager.UpdateAsync(user);
@@ -113,8 +152,8 @@ namespace Login.Services
             var user = await _userManager.FindByEmailAsync(email);
             if (user == null) return false;
 
-            var res = await _userManager.ConfirmEmailAsync(user, token);
-            return res.Succeeded;
+            var result = await _userManager.ConfirmEmailAsync(user, token);
+            return result.Succeeded;
         }
 
         public async Task<TwoFactorSetupDto> Get2FASetupAsync(string userId, string email)
@@ -142,24 +181,53 @@ namespace Login.Services
             };
         }
 
-        // ---------- helpers ----------
+        public async Task<bool> LogoutAsync(string userId)
+        {
+            // Có thể thêm logic invalidate token hoặc blacklist token ở đây
+            // Hiện tại chỉ return true vì JWT stateless
+            return await Task.FromResult(true);
+        }
+
+        public async Task<UserProfileDto> GetUserProfileAsync(string userId)
+        {
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user == null)
+                throw new Exception("Không tìm thấy người dùng");
+
+            return new UserProfileDto
+            {
+                Id = user.Id,
+                Email = user.Email,
+                FullName = $"{user.FirstName} {user.LastName}".Trim(),
+                PhoneNumber = user.PhoneNumber,
+                Is2FAEnabled = user.TwoFactorEnabled,
+                CreatedAt = user.CreatedAt,
+                LastLoginAt = user.LastLoginAt
+            };
+        }
+
+        // ---------- Private Methods ----------
         private async Task<string> GenerateJwtToken(ApplicationUser user)
         {
             var authClaims = new List<Claim>
             {
                 new Claim(ClaimTypes.NameIdentifier, user.Id),
-                new Claim(ClaimTypes.Email, user.Email),
-                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+                new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
+                new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+                new Claim(JwtRegisteredClaimNames.Iat,
+                    new DateTimeOffset(DateTime.UtcNow).ToUnixTimeSeconds().ToString(),
+                    ClaimValueTypes.Integer64)
             };
 
             var authSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(_configuration["JWT:Secret"])
+                Encoding.UTF8.GetBytes(_configuration["Jwt:Key"] ?? throw new InvalidOperationException("JWT Key not found"))
             );
 
             var token = new JwtSecurityToken(
-                issuer: _configuration["JWT:ValidIssuer"],
-                audience: _configuration["JWT:ValidAudience"],
-                expires: DateTime.Now.AddHours(3),
+                issuer: _configuration["Jwt:Issuer"],
+                audience: _configuration["Jwt:Audience"],
+                expires: DateTime.UtcNow.AddHours(24), // Token có hiệu lực 24 giờ
                 claims: authClaims,
                 signingCredentials: new SigningCredentials(authSigningKey, SecurityAlgorithms.HmacSha256)
             );
@@ -167,9 +235,10 @@ namespace Login.Services
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
-        private bool VerifyOtp(string base32Secret, string code)
+        private bool VerifyOtp(string? base32Secret, string code)
         {
-            if (string.IsNullOrEmpty(base32Secret)) return false;
+            if (string.IsNullOrEmpty(base32Secret) || string.IsNullOrEmpty(code))
+                return false;
 
             try
             {

@@ -15,22 +15,43 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 // === 2. Add Identity ===
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
+    // Password requirements
+    options.Password.RequireDigit = true;
+    options.Password.RequireLowercase = true;
+    options.Password.RequireUppercase = false;
+    options.Password.RequireNonAlphanumeric = false;
+    options.Password.RequiredLength = 6;
+    options.Password.RequiredUniqueChars = 1;
+
+    // User requirements
     options.User.RequireUniqueEmail = true;
     options.SignIn.RequireConfirmedEmail = false;
+    options.SignIn.RequireConfirmedPhoneNumber = false;
+
+    // Lockout settings
+    options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(5);
+    options.Lockout.MaxFailedAccessAttempts = 5;
+    options.Lockout.AllowedForNewUsers = true;
+
+    // Two Factor settings
     options.Tokens.AuthenticatorTokenProvider = TokenOptions.DefaultAuthenticatorProvider;
 })
 .AddEntityFrameworkStores<AppDbContext>()
 .AddDefaultTokenProviders();
 
 // === 3. Add JWT Authentication ===
+var jwtKey = builder.Configuration["Jwt:Key"]
+    ?? throw new InvalidOperationException("JWT Key not found in configuration");
+
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
     options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
 })
-.AddJwtBearer(cfg =>
+.AddJwtBearer(options =>
 {
-    cfg.TokenValidationParameters = new TokenValidationParameters
+    options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true,
         ValidateAudience = true,
@@ -38,47 +59,78 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true,
         ValidIssuer = builder.Configuration["Jwt:Issuer"],
         ValidAudience = builder.Configuration["Jwt:Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!)),
-        ClockSkew = TimeSpan.Zero
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+        ClockSkew = TimeSpan.Zero // Remove delay of token when expire
+    };
+
+    // Add event handlers for debugging (optional)
+    options.Events = new JwtBearerEvents
+    {
+        OnAuthenticationFailed = context =>
+        {
+            Console.WriteLine($"JWT Authentication failed: {context.Exception.Message}");
+            return Task.CompletedTask;
+        },
+        OnTokenValidated = context =>
+        {
+            Console.WriteLine($"JWT Token validated for user: {context.Principal?.Identity?.Name}");
+            return Task.CompletedTask;
+        }
     };
 });
 
 // === 4. Add Authorization ===
 builder.Services.AddAuthorization();
 
-// === 5. Add Dependency Injection for Services ===
+// === 5. Add CORS (if needed for frontend) ===
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
+
+// === 6. Add Dependency Injection for Services ===
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IAuthService, AuthService>();
-// === 6. Add Controllers + Swagger ===
+
+// === 7. Add Controllers + API Explorer ===
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// FIXED SWAGGER CONFIGURATION
-builder.Services.AddSwaggerGen(c =>
+// === 8. Add Swagger with JWT Support ===
+builder.Services.AddSwaggerGen(options =>
 {
-    // Đảm bảo OpenAPI 3.x
-    c.SwaggerDoc("v1", new OpenApiInfo
+    options.SwaggerDoc("v1", new OpenApiInfo
     {
         Version = "v1",
-        Title = "Auth 2FA API",
-        Description = "API with Email OTP and Google Authenticator 2FA using JWT"
+        Title = "Authentication 2FA API",
+        Description = "API hỗ trợ đăng ký, đăng nhập với Google Authenticator 2FA và JWT Token",
+        Contact = new OpenApiContact
+        {
+            Name = "Support",
+            Email = "support@example.com"
+        }
     });
 
-    // Cho phép annotation (mô tả từ attribute)
-    c.EnableAnnotations();
+    // Enable annotations
+    options.EnableAnnotations();
 
-    // Thêm cấu hình JWT
-    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    // Add JWT Authentication to Swagger
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
-        Description = "JWT Authorization header using the Bearer scheme. Example: 'Authorization: Bearer {token}'",
         Name = "Authorization",
-        In = ParameterLocation.Header,
         Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Nhập 'Bearer' [space] và JWT token. Ví dụ: 'Bearer eyJhbGciOiJIUzI1NiIs...'"
     });
 
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
             new OpenApiSecurityScheme
@@ -89,13 +141,20 @@ builder.Services.AddSwaggerGen(c =>
                     Id = "Bearer"
                 }
             },
-            new List<string>()
+            Array.Empty<string>()
         }
     });
+
+    // Include XML comments if available
+    var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    if (File.Exists(xmlPath))
+    {
+        options.IncludeXmlComments(xmlPath);
+    }
 });
 
 var app = builder.Build();
-
 // === 7. Configure Pipeline ===
 if (app.Environment.IsDevelopment())
 {
