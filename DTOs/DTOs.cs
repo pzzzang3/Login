@@ -20,7 +20,7 @@ namespace Login.Models.DTOs
         public string? PhoneNumber { get; set; }
     }
 
-    // DTO cho đăng nhập
+    // DTO cho đăng nhập - đã loại bỏ trường TwoFactorCode
     public class LoginDto
     {
         [Required(ErrorMessage = "Email là bắt buộc")]
@@ -30,10 +30,24 @@ namespace Login.Models.DTOs
         [Required(ErrorMessage = "Mật khẩu là bắt buộc")]
         public string Password { get; set; } = string.Empty;
 
-        // Mã OTP (chỉ cần khi đã bật 2FA)
-        public string? TwoFactorCode { get; set; }
-
         // Ghi nhớ đăng nhập
+        public bool RememberMe { get; set; } = false;
+    }
+
+    // DTO cho xác minh 2FA khi đăng nhập (API riêng)
+    public class Verify2FADto
+    {
+        [Required(ErrorMessage = "Email là bắt buộc")]
+        [EmailAddress(ErrorMessage = "Email không hợp lệ")]
+        public string Email { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Mật khẩu là bắt buộc")]
+        public string Password { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Mã OTP là bắt buộc")]
+        [StringLength(6, MinimumLength = 6, ErrorMessage = "Mã OTP phải có 6 số")]
+        public string TwoFactorCode { get; set; } = string.Empty;
+
         public bool RememberMe { get; set; } = false;
     }
 
@@ -44,21 +58,29 @@ namespace Login.Models.DTOs
         public string Message { get; set; } = string.Empty;
     }
 
-    // DTO cho bật 2FA
-    public class Enable2FADto
+    // DTO mới cho toggle 2FA (chỉ cần OTP, tự động toggle)
+    public class Toggle2FADto
     {
         [Required(ErrorMessage = "Mã OTP là bắt buộc")]
+        [StringLength(6, MinimumLength = 6, ErrorMessage = "Mã OTP phải có 6 số")]
         public string OtpCode { get; set; } = string.Empty;
     }
 
-    // DTO cho tắt 2FA
-    public class Disable2FADto
+    // Response DTO cho toggle 2FA
+    public class Toggle2FAResponseDto
     {
-        [Required(ErrorMessage = "Mã OTP là bắt buộc")]
-        public string OtpCode { get; set; } = string.Empty;
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public bool IsEnabled { get; set; }
     }
 
-    // DTO cho setup 2FA (QR code, secret key)
+    // DTO cho QR code 2FA
+    public class TwoFactorQRDto
+    {
+        public string QrCodeBase64 { get; set; } = string.Empty;
+    }
+
+    // DTO cho setup 2FA (deprecated - sẽ được thay thế bởi TwoFactorQRDto)
     public class TwoFactorSetupDto
     {
         public string SecretKey { get; set; } = string.Empty;
@@ -66,10 +88,6 @@ namespace Login.Models.DTOs
         public string ManualEntryKey { get; set; } = string.Empty;
     }
 
-    // DTO cho trạng thái 2FA
-    public class TwoFactorStatusDto
-    {
-        public bool IsEnabled { get; set; }
-        public bool HasSecretKey { get; set; }
-    }
+    // Xóa TwoFactorStatusDto vì không cần API riêng xem trạng thái
+    // Thông tin trạng thái 2FA sẽ có trong UserProfileDto
 }

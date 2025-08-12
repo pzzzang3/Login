@@ -64,7 +64,7 @@ namespace Login.Controllers
                     {
                         Message = result.Message,
                         RequiresTwoFactor = true,
-                        Instructions = "Vui lòng gửi lại request với TwoFactorCode"
+                        Instructions = "Vui lòng sử dụng API verify-2fa với mã OTP"
                     });
                 }
 
@@ -77,6 +77,32 @@ namespace Login.Controllers
             catch (Exception ex)
             {
                 return Unauthorized(new { Message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Xác minh mã 2FA khi đăng nhập (chỉ dành cho tài khoản đã bật 2FA)
+        /// </summary>
+        [HttpPost("verify-2fa")]
+        [SwaggerOperation(Summary = "Xác minh mã 2FA khi đăng nhập")]
+        [SwaggerResponse(200, "Xác minh thành công")]
+        [SwaggerResponse(400, "Mã OTP không hợp lệ")]
+        [SwaggerResponse(401, "Thông tin đăng nhập không đúng")]
+        public async Task<IActionResult> Verify2FA([FromBody] Verify2FADto model)
+        {
+            try
+            {
+                var result = await _authService.Verify2FAAsync(model);
+
+                return Ok(new
+                {
+                    Token = result.Token,
+                    Message = result.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Message = ex.Message });
             }
         }
 
@@ -106,32 +132,42 @@ namespace Login.Controllers
         }
 
         /// <summary>
-        /// Lấy thông tin cấu hình 2FA (QR code và secret key)
+        /// Lấy mã QR để cấu hình 2FA trên ứng dụng Authenticator
         /// </summary>
         [Authorize]
-        [HttpGet("get-2fa-setup")]
-        [SwaggerOperation(Summary = "Lấy thông tin cấu hình 2FA")]
-        [SwaggerResponse(200, "Thông tin cấu hình 2FA")]
-        public async Task<IActionResult> Get2FASetup()
+        [HttpGet("get-2fa-qr")]
+        [SwaggerOperation(Summary = "Lấy mã QR cấu hình 2FA")]
+        [SwaggerResponse(200, "Mã QR để quét bằng ứng dụng Authenticator")]
+        public async Task<IActionResult> Get2FAQRCode([FromQuery] bool returnBase64 = true)
         {
             try
             {
                 var userId = GetCurrentUserId();
                 var email = GetCurrentUserEmail();
 
-                var setupInfo = await _authService.Get2FASetupAsync(userId, email);
-                return Ok(new
+                var qrCode = await _authService.Get2FAQRCodeAsync(userId, email);
+
+                if (returnBase64)
                 {
-                    SecretKey = setupInfo.SecretKey,
-                    QrCodeUrl = setupInfo.QrCodeUrl,
-                    ManualEntryKey = setupInfo.ManualEntryKey,
-                    Instructions = new
+                    // Trả về JSON với base64
+                    return Ok(new
                     {
-                        Step1 = "Cài đặt app Google Authenticator hoặc tương tự",
-                        Step2 = "Quét QR code hoặc nhập manual key",
-                        Step3 = "Nhập mã 6 số để bật 2FA"
-                    }
-                });
+                        QrCodeBase64 = qrCode.QrCodeBase64,
+                        Instructions = new
+                        {
+                            Step1 = "Cài đặt app Google Authenticator, Microsoft Authenticator hoặc tương tự",
+                            Step2 = "Quét mã QR code bên dưới bằng ứng dụng",
+                            Step3 = "Nhập mã 6 số từ ứng dụng vào API toggle-2fa để bật/tắt 2FA"
+                        }
+                    });
+                }
+                else
+                {
+                    // Trả về trực tiếp file ảnh PNG
+                    var base64Data = qrCode.QrCodeBase64.Replace("data:image/png;base64,", "");
+                    var imageBytes = Convert.FromBase64String(base64Data);
+                    return File(imageBytes, "image/png", "qr-code-2fa.png");
+                }
             }
             catch (Exception ex)
             {
@@ -140,27 +176,29 @@ namespace Login.Controllers
         }
 
         /// <summary>
-        /// Bật 2FA với mã OTP từ Google Authenticator
+        /// Tự động bật/tắt 2FA dựa trên trạng thái hiện tại bằng mã OTP
         /// </summary>
         [Authorize]
-        [HttpPost("enable-2fa")]
-        [SwaggerOperation(Summary = "Bật xác thực 2 yếu tố")]
-        [SwaggerResponse(200, "Bật 2FA thành công")]
+        [HttpPost("toggle-2fa")]
+        [SwaggerOperation(Summary = "Tự động bật hoặc tắt xác thực 2 yếu tố")]
+        [SwaggerResponse(200, "Thao tác thành công")]
         [SwaggerResponse(400, "Mã OTP không hợp lệ")]
-        public async Task<IActionResult> Enable2FA([FromBody] Enable2FADto model)
+        public async Task<IActionResult> Toggle2FA([FromBody] Toggle2FADto model)
         {
             try
             {
                 var userId = GetCurrentUserId();
-                var result = await _authService.Enable2FAAsync(userId, model.OtpCode);
+                var result = await _authService.Toggle2FAAsync(userId, model.OtpCode);
 
-                if (!result)
-                    return BadRequest(new { Message = "Mã OTP không hợp lệ hoặc đã hết hạn" });
+                if (!result.Success)
+                    return BadRequest(new { Message = result.Message });
 
                 return Ok(new
                 {
-                    Message = "Đã bật 2FA thành công! Tài khoản của bạn giờ đây an toàn hơn.",
-                    Is2FAEnabled = true
+                    Message = result.Message,
+                    Is2FAEnabled = result.IsEnabled,
+                    Action = result.IsEnabled ? "Đã bật 2FA" : "Đã tắt 2FA",
+                    Warning = !result.IsEnabled ? "Tài khoản của bạn ít an toàn hơn khi không sử dụng 2FA" : "Tài khoản của bạn giờ đây được bảo vệ tốt hơn với 2FA"
                 });
             }
             catch (Exception ex)
@@ -170,67 +208,7 @@ namespace Login.Controllers
         }
 
         /// <summary>
-        /// Tắt 2FA với mã OTP xác nhận
-        /// </summary>
-        [Authorize]
-        [HttpPost("disable-2fa")]
-        [SwaggerOperation(Summary = "Tắt xác thực 2 yếu tố")]
-        [SwaggerResponse(200, "Tắt 2FA thành công")]
-        [SwaggerResponse(400, "Mã OTP không hợp lệ")]
-        public async Task<IActionResult> Disable2FA([FromBody] Disable2FADto model)
-        {
-            try
-            {
-                var userId = GetCurrentUserId();
-                var result = await _authService.Disable2FAAsync(userId, model.OtpCode);
-
-                if (!result)
-                    return BadRequest(new { Message = "Mã OTP không hợp lệ" });
-
-                return Ok(new
-                {
-                    Message = "Đã tắt 2FA thành công.",
-                    Is2FAEnabled = false,
-                    Warning = "Tài khoản của bạn ít an toàn hơn khi không sử dụng 2FA"
-                });
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(new { Message = ex.Message });
-            }
-        }
-
-        /// <summary>
-        /// Kiểm tra trạng thái 2FA của tài khoản
-        /// </summary>
-        [Authorize]
-        [HttpGet("2fa-status")]
-        [SwaggerOperation(Summary = "Kiểm tra trạng thái 2FA")]
-        [SwaggerResponse(200, "Trạng thái 2FA")]
-        public async Task<IActionResult> Get2FAStatus()
-        {
-            try
-            {
-                var userId = GetCurrentUserId();
-                var isEnabled = await _authService.Is2FAEnabledAsync(userId);
-
-                return Ok(new
-                {
-                    Is2FAEnabled = isEnabled,
-                    Status = isEnabled ? "Đã bật 2FA" : "Chưa bật 2FA",
-                    Recommendation = isEnabled ?
-                        "Tài khoản của bạn được bảo vệ bởi 2FA" :
-                        "Khuyến nghị bật 2FA để tăng cường bảo mật"
-                });
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(new { Message = ex.Message });
-            }
-        }
-
-        /// <summary>
-        /// Lấy thông tin profile người dùng
+        /// Lấy thông tin profile người dùng (bao gồm trạng thái 2FA)
         /// </summary>
         [Authorize]
         [HttpGet("profile")]

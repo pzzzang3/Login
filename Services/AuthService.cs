@@ -32,12 +32,12 @@ namespace Login.Services
             {
                 UserName = dto.Email,
                 Email = dto.Email,
-                TwoFactorEnabled = false, // Sử dụng built-in property
+                TwoFactorEnabled = false,
                 FirstName = dto.FullName?.Split(' ').FirstOrDefault(),
                 LastName = dto.FullName?.Contains(' ') == true ?
                     string.Join(" ", dto.FullName.Split(' ').Skip(1)) : null,
                 PhoneNumber = dto.PhoneNumber,
-                EmailConfirmed = true // Set true để tránh vấn đề xác thực email
+                EmailConfirmed = true
             };
 
             var result = await _userManager.CreateAsync(user, dto.Password);
@@ -71,38 +71,58 @@ namespace Login.Services
                 };
             }
 
-            // Nếu 2FA bật
-            if (string.IsNullOrWhiteSpace(dto.TwoFactorCode))
-            {
-                return new LoginResponseDto
-                {
-                    RequiresTwoFactor = true,
-                    Message = "Tài khoản đã bật 2FA. Vui lòng nhập mã OTP."
-                };
-            }
-
-            // Xác thực mã OTP
-            if (!VerifyOtp(user.TwoFactorSecretKey, dto.TwoFactorCode))
-            {
-                throw new Exception("Mã OTP không hợp lệ.");
-            }
-
-            // Tạo JWT sau khi xác thực 2FA thành công
-            var jwtToken = await GenerateJwtToken(user);
+            // Nếu 2FA bật → yêu cầu sử dụng API verify-2fa
             return new LoginResponseDto
             {
-                Token = jwtToken,
-                RequiresTwoFactor = false,
-                Message = "Đăng nhập thành công"
+                RequiresTwoFactor = true,
+                Message = "Tài khoản đã bật 2FA. Vui lòng sử dụng API verify-2fa với mã OTP."
             };
         }
 
-        public async Task<bool> Enable2FAAsync(string userId, string otpCode)
+        public async Task<LoginResponseDto> Verify2FAAsync(Verify2FADto dto)
+        {
+            var user = await _userManager.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+            if (user == null)
+                throw new Exception("Email hoặc mật khẩu không đúng.");
+
+            // Kiểm tra mật khẩu
+            var passwordValid = await _userManager.CheckPasswordAsync(user, dto.Password);
+            if (!passwordValid)
+                throw new Exception("Email hoặc mật khẩu không đúng.");
+
+            // Kiểm tra xem có bật 2FA không
+            if (!user.TwoFactorEnabled)
+                throw new Exception("Tài khoản chưa bật 2FA. Vui lòng sử dụng API login thông thường.");
+
+            // Xác thực mã OTP
+            if (!VerifyOtp(user.TwoFactorSecretKey, dto.TwoFactorCode))
+                throw new Exception("Mã OTP không hợp lệ.");
+
+            // Cập nhật thời gian đăng nhập cuối
+            user.LastLoginAt = DateTime.UtcNow;
+            await _userManager.UpdateAsync(user);
+
+            // Tạo JWT sau khi xác thực 2FA thành công
+            var token = await GenerateJwtToken(user);
+            return new LoginResponseDto
+            {
+                Token = token,
+                RequiresTwoFactor = false,
+                Message = "Đăng nhập với 2FA thành công"
+            };
+        }
+
+        public async Task<Toggle2FAResponseDto> Toggle2FAAsync(string userId, string otpCode)
         {
             var user = await _userManager.FindByIdAsync(userId);
-            if (user == null) return false;
+            if (user == null)
+                return new Toggle2FAResponseDto
+                {
+                    Success = false,
+                    Message = "Không tìm thấy người dùng"
+                };
 
-            // Nếu user chưa có secret key → tạo mới
+            // Tạo secret key nếu chưa có
             if (string.IsNullOrEmpty(user.TwoFactorSecretKey))
             {
                 var secret = KeyGeneration.GenerateRandomKey(20);
@@ -110,41 +130,33 @@ namespace Login.Services
                 await _userManager.UpdateAsync(user);
             }
 
-            // Xác minh OTP
+            // Xác minh OTP trước
             if (!VerifyOtp(user.TwoFactorSecretKey, otpCode))
-                return false;
+                return new Toggle2FAResponseDto
+                {
+                    Success = false,
+                    Message = "Mã OTP không hợp lệ hoặc đã hết hạn"
+                };
 
-            // Bật 2FA - Sử dụng UserManager để bật 2FA
-            await _userManager.SetTwoFactorEnabledAsync(user, true);
+            // Tự động toggle trạng thái 2FA
+            bool newStatus = !user.TwoFactorEnabled;
+            await _userManager.SetTwoFactorEnabledAsync(user, newStatus);
 
-            return true;
-        }
+            // Nếu tắt 2FA thì xóa secret key
+            if (!newStatus)
+            {
+                user.TwoFactorSecretKey = null;
+                await _userManager.UpdateAsync(user);
+            }
 
-        public async Task<bool> Disable2FAAsync(string userId, string otpCode)
-        {
-            var user = await _userManager.FindByIdAsync(userId);
-            if (user == null) return false;
-
-            // Nếu 2FA chưa bật thì không cần làm gì
-            if (!user.TwoFactorEnabled)
-                return true;
-
-            // Phải xác minh OTP trước khi tắt
-            if (!VerifyOtp(user.TwoFactorSecretKey, otpCode))
-                return false;
-
-            // Tắt 2FA và xóa secret key - Sử dụng UserManager
-            await _userManager.SetTwoFactorEnabledAsync(user, false);
-            user.TwoFactorSecretKey = null;
-            await _userManager.UpdateAsync(user);
-
-            return true;
-        }
-
-        public async Task<bool> Is2FAEnabledAsync(string userId)
-        {
-            var user = await _userManager.FindByIdAsync(userId);
-            return user?.TwoFactorEnabled ?? false;
+            return new Toggle2FAResponseDto
+            {
+                Success = true,
+                Message = newStatus ?
+                    "Đã bật 2FA thành công! Tài khoản của bạn giờ đây an toàn hơn." :
+                    "Đã tắt 2FA thành công.",
+                IsEnabled = newStatus
+            };
         }
 
         public async Task<bool> VerifyEmailOtpAsync(string email, string token)
@@ -156,7 +168,7 @@ namespace Login.Services
             return result.Succeeded;
         }
 
-        public async Task<TwoFactorSetupDto> Get2FASetupAsync(string userId, string email)
+        public async Task<TwoFactorQRDto> Get2FAQRCodeAsync(string userId, string email)
         {
             var user = await _userManager.FindByIdAsync(userId);
             if (user == null)
@@ -170,15 +182,38 @@ namespace Login.Services
                 await _userManager.UpdateAsync(user);
             }
 
-            var appName = _configuration["AppName"] ?? "MyApp";
+            var appName = _configuration["AppName"] ?? "Auth2FA App";
             var qrCodeUrl = $"otpauth://totp/{Uri.EscapeDataString(appName)}:{Uri.EscapeDataString(email)}?secret={user.TwoFactorSecretKey}&issuer={Uri.EscapeDataString(appName)}";
 
-            return new TwoFactorSetupDto
+            // Tạo QR code dưới dạng base64
+            var qrCodeBase64 = await GenerateQRCodeBase64(qrCodeUrl);
+
+            return new TwoFactorQRDto
             {
-                SecretKey = user.TwoFactorSecretKey,
-                QrCodeUrl = qrCodeUrl,
-                ManualEntryKey = user.TwoFactorSecretKey
+                QrCodeBase64 = qrCodeBase64
             };
+        }
+
+        private async Task<string> GenerateQRCodeBase64(string content)
+        {
+            try
+            {
+                // Sử dụng QRCoder để tạo QR code
+                using var qrGenerator = new QRCoder.QRCodeGenerator();
+                var qrCodeData = qrGenerator.CreateQrCode(content, QRCoder.QRCodeGenerator.ECCLevel.Q);
+                using var qrCode = new QRCoder.PngByteQRCode(qrCodeData);
+                var qrCodeBytes = qrCode.GetGraphic(20, new byte[] { 0, 0, 0 }, new byte[] { 255, 255, 255 });
+                return await Task.FromResult($"data:image/png;base64,{Convert.ToBase64String(qrCodeBytes)}");
+            }
+            catch (Exception ex)
+            {
+                // Log error nếu cần
+                Console.WriteLine($"Error generating QR code: {ex.Message}");
+
+                // Fallback: return a simple 1x1 pixel placeholder
+                var placeholderBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+                return $"data:image/png;base64,{Convert.ToBase64String(placeholderBytes)}";
+            }
         }
 
         public async Task<bool> LogoutAsync(string userId)
@@ -214,8 +249,8 @@ namespace Login.Services
                 new Claim(ClaimTypes.NameIdentifier, user.Id),
                 new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
                 new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
-                new Claim("userId", user.Id), // Thêm claim userId rõ ràng
-                new Claim("email", user.Email ?? string.Empty), // Thêm claim email rõ ràng
+                new Claim("userId", user.Id),
+                new Claim("email", user.Email ?? string.Empty),
                 new Claim(JwtRegisteredClaimNames.Sub, user.Id),
                 new Claim(JwtRegisteredClaimNames.Email, user.Email ?? string.Empty),
                 new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
@@ -240,7 +275,7 @@ namespace Login.Services
             var token = new JwtSecurityToken(
                 issuer: _configuration["Jwt:Issuer"],
                 audience: _configuration["Jwt:Audience"],
-                expires: DateTime.UtcNow.AddHours(24), // Token có hiệu lực 24 giờ
+                expires: DateTime.UtcNow.AddHours(24),
                 claims: authClaims,
                 signingCredentials: new SigningCredentials(authSigningKey, SecurityAlgorithms.HmacSha256)
             );
