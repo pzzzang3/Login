@@ -2,16 +2,16 @@
 
 public class ApplicationUser : IdentityUser
 {
-    // Properties for 2FA
-    public bool IsTwoFactorEnabled { get; set; }
+    // Sử dụng TwoFactorEnabled có sẵn từ IdentityUser, không cần IsTwoFactorEnabled
+    // public bool IsTwoFactorEnabled { get; set; } // Xóa dòng này
+
     public string? AuthenticatorKey { get; set; }
     public DateTime? EmailConfirmationTokenExpiry { get; set; }
     public string? EmailOtpCode { get; set; }
     public DateTime? EmailOtpExpiry { get; set; }
     public string? TwoFactorSecretKey { get; set; }
 
-
-    // Additional properties you might need
+    // Additional properties
     public string? FirstName { get; set; }
     public string? LastName { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

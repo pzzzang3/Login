@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using System.Security.Claims;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -25,7 +26,7 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 
     // User requirements
     options.User.RequireUniqueEmail = true;
-    options.SignIn.RequireConfirmedEmail = false;
+    options.SignIn.RequireConfirmedEmail = false; // Tạm tắt để test dễ hơn
     options.SignIn.RequireConfirmedPhoneNumber = false;
 
     // Lockout settings
@@ -40,8 +41,16 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 .AddDefaultTokenProviders();
 
 // === 3. Add JWT Authentication ===
-var jwtKey = builder.Configuration["Jwt:Key"]
-    ?? throw new InvalidOperationException("JWT Key not found in configuration");
+var jwtKey = builder.Configuration["Jwt:Key"];
+var jwtIssuer = builder.Configuration["Jwt:Issuer"];
+var jwtAudience = builder.Configuration["Jwt:Audience"];
+
+if (string.IsNullOrEmpty(jwtKey))
+{
+    throw new InvalidOperationException("JWT Key not found in configuration");
+}
+
+Console.WriteLine($"JWT Config - Issuer: {jwtIssuer}, Audience: {jwtAudience}");
 
 builder.Services.AddAuthentication(options =>
 {
@@ -51,29 +60,55 @@ builder.Services.AddAuthentication(options =>
 })
 .AddJwtBearer(options =>
 {
+    options.SaveToken = true;
+    options.RequireHttpsMetadata = false; // Tạm tắt cho development
     options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true,
         ValidateAudience = true,
         ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
-        ValidIssuer = builder.Configuration["Jwt:Issuer"],
-        ValidAudience = builder.Configuration["Jwt:Audience"],
+        ValidIssuer = jwtIssuer,
+        ValidAudience = jwtAudience,
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
-        ClockSkew = TimeSpan.Zero // Remove delay of token when expire
+        ClockSkew = TimeSpan.Zero, // Remove delay of token when expire
+        RequireExpirationTime = true,
+        // Validate claims
+        NameClaimType = ClaimTypes.NameIdentifier,
+        RoleClaimType = ClaimTypes.Role
     };
 
-    // Add event handlers for debugging (optional)
+    // Add event handlers for debugging
     options.Events = new JwtBearerEvents
     {
         OnAuthenticationFailed = context =>
         {
             Console.WriteLine($"JWT Authentication failed: {context.Exception.Message}");
+            if (context.Exception is SecurityTokenExpiredException)
+            {
+                context.Response.Headers.Add("Token-Expired", "true");
+            }
             return Task.CompletedTask;
         },
         OnTokenValidated = context =>
         {
-            Console.WriteLine($"JWT Token validated for user: {context.Principal?.Identity?.Name}");
+            var userId = context.Principal?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var email = context.Principal?.FindFirst(ClaimTypes.Email)?.Value;
+            Console.WriteLine($"JWT Token validated - UserId: {userId}, Email: {email}");
+            return Task.CompletedTask;
+        },
+        OnChallenge = context =>
+        {
+            Console.WriteLine($"JWT Challenge: {context.Error}, {context.ErrorDescription}");
+            return Task.CompletedTask;
+        },
+        OnMessageReceived = context =>
+        {
+            var token = context.Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").Last();
+            if (!string.IsNullOrEmpty(token))
+            {
+                Console.WriteLine($"JWT Token received: {token[..Math.Min(50, token.Length)]}...");
+            }
             return Task.CompletedTask;
         }
     };
@@ -123,11 +158,11 @@ builder.Services.AddSwaggerGen(options =>
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Name = "Authorization",
-        Type = SecuritySchemeType.ApiKey,
+        Type = SecuritySchemeType.Http,
         Scheme = "Bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
-        Description = "Nhập 'Bearer' [space] và JWT token. Ví dụ: 'Bearer eyJhbGciOiJIUzI1NiIs...'"
+        Description = "Nhập JWT token vào đây. Ví dụ: eyJhbGciOiJIUzI1NiIs..."
     });
 
     options.AddSecurityRequirement(new OpenApiSecurityRequirement
@@ -155,7 +190,8 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 var app = builder.Build();
-// === 7. Configure Pipeline ===
+
+// === Configure Pipeline ===
 if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
@@ -164,11 +200,13 @@ if (app.Environment.IsDevelopment())
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "Auth 2FA API V1");
         c.RoutePrefix = string.Empty; // Mở Swagger UI tại "/"
+        c.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.None);
     });
 }
 
 app.UseHttpsRedirection();
-app.UseAuthentication();
+app.UseCors("AllowAll");
+app.UseAuthentication(); // Phải đặt trước UseAuthorization
 app.UseAuthorization();
 app.MapControllers();
 

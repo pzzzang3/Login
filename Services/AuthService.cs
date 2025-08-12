@@ -32,11 +32,12 @@ namespace Login.Services
             {
                 UserName = dto.Email,
                 Email = dto.Email,
-                TwoFactorEnabled = false, // Mặc định tắt 2FA
+                TwoFactorEnabled = false, // Sử dụng built-in property
                 FirstName = dto.FullName?.Split(' ').FirstOrDefault(),
                 LastName = dto.FullName?.Contains(' ') == true ?
                     string.Join(" ", dto.FullName.Split(' ').Skip(1)) : null,
-                PhoneNumber = dto.PhoneNumber
+                PhoneNumber = dto.PhoneNumber,
+                EmailConfirmed = true // Set true để tránh vấn đề xác thực email
             };
 
             var result = await _userManager.CreateAsync(user, dto.Password);
@@ -113,9 +114,8 @@ namespace Login.Services
             if (!VerifyOtp(user.TwoFactorSecretKey, otpCode))
                 return false;
 
-            // Bật 2FA
-            user.TwoFactorEnabled = true;
-            await _userManager.UpdateAsync(user);
+            // Bật 2FA - Sử dụng UserManager để bật 2FA
+            await _userManager.SetTwoFactorEnabledAsync(user, true);
 
             return true;
         }
@@ -133,8 +133,8 @@ namespace Login.Services
             if (!VerifyOtp(user.TwoFactorSecretKey, otpCode))
                 return false;
 
-            // Tắt 2FA và xóa secret key
-            user.TwoFactorEnabled = false;
+            // Tắt 2FA và xóa secret key - Sử dụng UserManager
+            await _userManager.SetTwoFactorEnabledAsync(user, false);
             user.TwoFactorSecretKey = null;
             await _userManager.UpdateAsync(user);
 
@@ -214,15 +214,28 @@ namespace Login.Services
                 new Claim(ClaimTypes.NameIdentifier, user.Id),
                 new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
                 new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
+                new Claim("userId", user.Id), // Thêm claim userId rõ ràng
+                new Claim("email", user.Email ?? string.Empty), // Thêm claim email rõ ràng
+                new Claim(JwtRegisteredClaimNames.Sub, user.Id),
+                new Claim(JwtRegisteredClaimNames.Email, user.Email ?? string.Empty),
                 new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
                 new Claim(JwtRegisteredClaimNames.Iat,
                     new DateTimeOffset(DateTime.UtcNow).ToUnixTimeSeconds().ToString(),
                     ClaimValueTypes.Integer64)
             };
 
-            var authSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(_configuration["Jwt:Key"] ?? throw new InvalidOperationException("JWT Key not found"))
-            );
+            // Thêm roles nếu có
+            var userRoles = await _userManager.GetRolesAsync(user);
+            foreach (var role in userRoles)
+            {
+                authClaims.Add(new Claim(ClaimTypes.Role, role));
+            }
+
+            var jwtKey = _configuration["Jwt:Key"];
+            if (string.IsNullOrEmpty(jwtKey))
+                throw new InvalidOperationException("JWT Key not found in configuration");
+
+            var authSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
 
             var token = new JwtSecurityToken(
                 issuer: _configuration["Jwt:Issuer"],
