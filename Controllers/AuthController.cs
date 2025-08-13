@@ -19,24 +19,24 @@ namespace Login.Controllers
         }
 
         /// <summary>
-        /// Đăng ký tài khoản mới (mặc định chưa bật 2FA)
+        /// Đăng ký tài khoản mới (gửi OTP qua email để xác thực)
         /// </summary>
         [HttpPost("register")]
         [SwaggerOperation(Summary = "Đăng ký tài khoản mới")]
-        [SwaggerResponse(200, "Đăng ký thành công, vui lòng đăng nhập")]
+        [SwaggerResponse(200, "Đăng ký thành công, vui lòng kiểm tra email để xác thực tài khoản")]
         [SwaggerResponse(400, "Đăng ký thất bại")]
         public async Task<IActionResult> Register([FromBody] RegisterDto model)
         {
             try
             {
                 var result = await _authService.RegisterAsync(model);
-                if (!result)
-                    return BadRequest("Đăng ký thất bại");
+                if (!result.Success)
+                    return BadRequest(new { Message = result.Message });
 
                 return Ok(new
                 {
-                    Message = "Đăng ký thành công! Vui lòng đăng nhập để tiếp tục.",
-                    RequiresLogin = true
+                    Message = result.Message,
+                    Instructions = "Vui lòng kiểm tra email và sử dụng API verify-email với mã OTP để kích hoạt tài khoản"
                 });
             }
             catch (Exception ex)
@@ -46,7 +46,34 @@ namespace Login.Controllers
         }
 
         /// <summary>
-        /// Đăng nhập (trả token nếu chưa bật 2FA, yêu cầu OTP nếu đã bật 2FA)
+        /// Xác thực email bằng OTP code được gửi qua email
+        /// </summary>
+        [HttpPost("verify-email")]
+        [SwaggerOperation(Summary = "Xác thực email bằng OTP code")]
+        [SwaggerResponse(200, "Xác thực email thành công, tài khoản đã được kích hoạt")]
+        [SwaggerResponse(400, "Mã OTP không hợp lệ hoặc đã hết hạn")]
+        public async Task<IActionResult> VerifyEmail([FromBody] VerifyEmailDto model)
+        {
+            try
+            {
+                var result = await _authService.VerifyEmailAsync(model);
+                if (!result.Success)
+                    return BadRequest(new { Message = result.Message });
+
+                return Ok(new
+                {
+                    Message = result.Message,
+                    Status = "Tài khoản đã được kích hoạt thành công"
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Đăng nhập (trả token nếu chưa bật 2FA, yêu cầu confirm-login nếu đã bật 2FA)
         /// </summary>
         [HttpPost("login")]
         [SwaggerOperation(Summary = "Đăng nhập vào hệ thống")]
@@ -64,14 +91,16 @@ namespace Login.Controllers
                     {
                         Message = result.Message,
                         RequiresTwoFactor = true,
-                        Instructions = "Vui lòng sử dụng API verify-2fa với mã OTP"
+                        LoginSessionId = result.LoginSessionId,
+                        Instructions = "Tài khoản đang bật 2FA. Vui lòng nhập OTP vào API confirm-login để hoàn tất đăng nhập"
                     });
                 }
 
                 return Ok(new
                 {
                     Token = result.Token,
-                    Message = result.Message
+                    Message = result.Message,
+                    RequiresTwoFactor = false
                 });
             }
             catch (Exception ex)
@@ -81,18 +110,20 @@ namespace Login.Controllers
         }
 
         /// <summary>
-        /// Xác minh mã 2FA khi đăng nhập (chỉ dành cho tài khoản đã bật 2FA)
+        /// Xác nhận đăng nhập với mã 2FA (dành cho tài khoản đã bật 2FA)
         /// </summary>
-        [HttpPost("verify-2fa")]
-        [SwaggerOperation(Summary = "Xác minh mã 2FA khi đăng nhập")]
-        [SwaggerResponse(200, "Xác minh thành công")]
-        [SwaggerResponse(400, "Mã OTP không hợp lệ")]
-        [SwaggerResponse(401, "Thông tin đăng nhập không đúng")]
-        public async Task<IActionResult> Verify2FA([FromBody] Verify2FADto model)
+        [HttpPost("confirm-login")]
+        [SwaggerOperation(Summary = "Xác nhận đăng nhập với mã 2FA")]
+        [SwaggerResponse(200, "Đăng nhập thành công")]
+        [SwaggerResponse(400, "Mã OTP không hợp lệ hoặc session đã hết hạn")]
+        [SwaggerResponse(401, "Session không hợp lệ")]
+        public async Task<IActionResult> ConfirmLogin([FromBody] ConfirmLoginDto model)
         {
             try
             {
-                var result = await _authService.Verify2FAAsync(model);
+                var result = await _authService.ConfirmLoginAsync(model);
+                if (!result.Success)
+                    return BadRequest(new { Message = result.Message });
 
                 return Ok(new
                 {
@@ -234,24 +265,25 @@ namespace Login.Controllers
         }
 
         /// <summary>
-        /// Xác minh OTP email (nếu cần thiết)
+        /// Gửi lại mã OTP xác thực email (nếu mã cũ đã hết hạn)
         /// </summary>
-        [HttpPost("verify-email-otp")]
-        [SwaggerOperation(Summary = "Xác minh email OTP")]
-        [SwaggerResponse(200, "Xác minh email thành công")]
-        [SwaggerResponse(400, "Token không hợp lệ")]
-        public async Task<IActionResult> VerifyEmailOtp([FromQuery] string email, [FromQuery] string token)
+        [HttpPost("resend-email-otp")]
+        [SwaggerOperation(Summary = "Gửi lại mã OTP xác thực email")]
+        [SwaggerResponse(200, "Mã OTP đã được gửi lại")]
+        [SwaggerResponse(400, "Email không tồn tại hoặc đã được xác thực")]
+        public async Task<IActionResult> ResendEmailOtp([FromBody] ResendEmailOtpDto model)
         {
-            if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(token))
-                return BadRequest(new { Message = "Email và token là bắt buộc." });
-
             try
             {
-                var result = await _authService.VerifyEmailOtpAsync(email, token);
-                if (!result)
-                    return BadRequest(new { Message = "Token không hợp lệ hoặc đã hết hạn" });
+                var result = await _authService.ResendEmailOtpAsync(model.Email);
+                if (!result.Success)
+                    return BadRequest(new { Message = result.Message });
 
-                return Ok(new { Message = "Xác minh email thành công" });
+                return Ok(new
+                {
+                    Message = result.Message,
+                    Instructions = "Vui lòng kiểm tra email và sử dụng mã OTP mới"
+                });
             }
             catch (Exception ex)
             {

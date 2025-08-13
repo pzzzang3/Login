@@ -1,6 +1,7 @@
 using Login.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.UI.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -27,7 +28,7 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 
     // User requirements
     options.User.RequireUniqueEmail = true;
-    options.SignIn.RequireConfirmedEmail = false; // Tạm tắt để test dễ hơn
+    options.SignIn.RequireConfirmedEmail = true; // Bật yêu cầu xác thực email
     options.SignIn.RequireConfirmedPhoneNumber = false;
 
     // Lockout settings
@@ -133,6 +134,27 @@ builder.Services.AddCors(options =>
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IAuthService, AuthService>();
 
+// Add EmailSender - Use Mock in Development if email settings are not configured
+var emailHost = builder.Configuration["EmailSettings:Host"];
+var emailUsername = builder.Configuration["EmailSettings:Username"];
+var emailPassword = builder.Configuration["EmailSettings:Password"];
+
+if (builder.Environment.IsDevelopment() &&
+    (string.IsNullOrEmpty(emailHost) || string.IsNullOrEmpty(emailUsername) || string.IsNullOrEmpty(emailPassword)))
+{
+    builder.Services.AddTransient<IEmailSender>(provider =>
+        new Login.Services.MockEmailSender(provider.GetService<ILogger<Login.Services.MockEmailSender>>()!));
+    Console.WriteLine("⚠️  Using MockEmailSender - Email settings not configured");
+}
+else
+{
+    builder.Services.AddTransient<IEmailSender>(provider =>
+        new Login.Services.EmailSender(
+            provider.GetService<IConfiguration>()!,
+            provider.GetService<ILogger<Login.Services.EmailSender>>()!));
+    Console.WriteLine("✅ Using real EmailSender with SMTP configuration");
+}
+
 // === 7. Add Controllers + API Explorer ===
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -143,7 +165,7 @@ builder.Services.AddSwaggerGen(options =>
     options.SwaggerDoc("v1", new OpenApiInfo
     {
         Version = "v1",
-        Title = "Authentication 2FA API",
+        Title = "Authentication 2FA API with Email Verification",
         Contact = new OpenApiContact
         {
             Name = "Development Team",
@@ -195,6 +217,9 @@ builder.Services.AddSwaggerGen(options =>
     }
 });
 
+// === 9. Add Background Service for session cleanup (optional) ===
+builder.Services.AddHostedService<SessionCleanupService>();
+
 var app = builder.Build();
 
 // === Configure Pipeline ===
@@ -204,9 +229,9 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI(c =>
     {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Auth 2FA API V1 - Optimized");
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Auth 2FA API V1 - Email Verification");
         c.RoutePrefix = string.Empty; // Mở Swagger UI tại "/"
-        c.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.None);
+        c.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.List);
         c.DefaultModelRendering(Swashbuckle.AspNetCore.SwaggerUI.ModelRendering.Model);
         c.EnableDeepLinking();
         c.ShowExtensions();
@@ -215,14 +240,49 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
-app.UseAuthentication(); 
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
 // Display startup info
-Console.WriteLine("=== Auth 2FA API Started ===");
+Console.WriteLine("=== Auth 2FA API with Email Verification Started ===");
 Console.WriteLine($"Environment: {app.Environment.EnvironmentName}");
 Console.WriteLine($"Swagger UI: {(app.Environment.IsDevelopment() ? "http://localhost:5128" : "Disabled in production")}");
-Console.WriteLine("============================");
+Console.WriteLine("Features:");
+Console.WriteLine("- Email verification with OTP");
+Console.WriteLine("- 2FA with Google Authenticator");
+Console.WriteLine("- JWT Authentication");
+Console.WriteLine("- Secure login flow");
+Console.WriteLine("==============================================");
 
 app.Run();
+
+// Background service để dọn dẹp expired sessions
+public class SessionCleanupService : BackgroundService
+{
+    private readonly ILogger<SessionCleanupService> _logger;
+
+    public SessionCleanupService(ILogger<SessionCleanupService> logger)
+    {
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                AuthService.CleanupExpiredSessions();
+                _logger.LogInformation("Cleaned up expired login sessions at {Time}", DateTimeOffset.Now);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during session cleanup");
+            }
+
+            // Chạy mỗi 5 phút
+            await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+        }
+    }
+}
