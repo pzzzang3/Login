@@ -176,19 +176,20 @@ namespace Login.Controllers
         }
 
         /// <summary>
-        /// Tự động bật/tắt 2FA dựa trên trạng thái hiện tại bằng mã OTP
+        /// Bật hoặc tắt xác thực 2 yếu tố cho tài khoản
         /// </summary>
         [Authorize]
         [HttpPost("toggle-2fa")]
-        [SwaggerOperation(Summary = "Tự động bật hoặc tắt xác thực 2 yếu tố")]
-        [SwaggerResponse(200, "Thao tác thành công")]
-        [SwaggerResponse(400, "Mã OTP không hợp lệ")]
+        [SwaggerOperation(Summary = "Bật hoặc tắt xác thực 2 yếu tố")]
+        [SwaggerResponse(200, "Thay đổi cài đặt 2FA thành công")]
+        [SwaggerResponse(400, "Yêu cầu không hợp lệ")]
+        [SwaggerResponse(401, "Không có quyền truy cập - cần đăng nhập")]
         public async Task<IActionResult> Toggle2FA([FromBody] Toggle2FADto model)
         {
             try
             {
                 var userId = GetCurrentUserId();
-                var result = await _authService.Toggle2FAAsync(userId, model.OtpCode);
+                var result = await _authService.Toggle2FAAsync(userId, model.Enable);
 
                 if (!result.Success)
                     return BadRequest(new { Message = result.Message });
@@ -197,8 +198,10 @@ namespace Login.Controllers
                 {
                     Message = result.Message,
                     Is2FAEnabled = result.IsEnabled,
-                    Action = result.IsEnabled ? "Đã bật 2FA" : "Đã tắt 2FA",
-                    Warning = !result.IsEnabled ? "Tài khoản của bạn ít an toàn hơn khi không sử dụng 2FA" : "Tài khoản của bạn giờ đây được bảo vệ tốt hơn với 2FA"
+                    Status = result.IsEnabled ? "2FA đã được bật" : "2FA đã được tắt",
+                    SecurityNote = result.IsEnabled ?
+                        "Tài khoản của bạn giờ đây được bảo vệ tốt hơn với xác thực 2 yếu tố" :
+                        "Khuyến nghị bật lại 2FA để tăng cường bảo mật tài khoản"
                 });
             }
             catch (Exception ex)

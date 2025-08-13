@@ -112,7 +112,7 @@ namespace Login.Services
             };
         }
 
-        public async Task<Toggle2FAResponseDto> Toggle2FAAsync(string userId, string otpCode)
+        public async Task<Toggle2FAResponseDto> Toggle2FAAsync(string userId, bool enable)
         {
             var user = await _userManager.FindByIdAsync(userId);
             if (user == null)
@@ -122,41 +122,63 @@ namespace Login.Services
                     Message = "Không tìm thấy người dùng"
                 };
 
-            // Tạo secret key nếu chưa có
-            if (string.IsNullOrEmpty(user.TwoFactorSecretKey))
+            if (enable)
             {
-                var secret = KeyGeneration.GenerateRandomKey(20);
-                user.TwoFactorSecretKey = Base32Encoding.ToString(secret);
-                await _userManager.UpdateAsync(user);
-            }
+                // Bật 2FA
+                // Kiểm tra xem đã bật chưa
+                if (user.TwoFactorEnabled)
+                {
+                    return new Toggle2FAResponseDto
+                    {
+                        Success = true,
+                        Message = "2FA đã được bật từ trước",
+                        IsEnabled = true
+                    };
+                }
 
-            // Xác minh OTP trước
-            if (!VerifyOtp(user.TwoFactorSecretKey, otpCode))
+                // Tạo secret key nếu chưa có
+                if (string.IsNullOrEmpty(user.TwoFactorSecretKey))
+                {
+                    var secret = KeyGeneration.GenerateRandomKey(20);
+                    user.TwoFactorSecretKey = Base32Encoding.ToString(secret);
+                    await _userManager.UpdateAsync(user);
+                }
+
+                // Bật 2FA
+                await _userManager.SetTwoFactorEnabledAsync(user, true);
+
                 return new Toggle2FAResponseDto
                 {
-                    Success = false,
-                    Message = "Mã OTP không hợp lệ hoặc đã hết hạn"
+                    Success = true,
+                    Message = "Đã bật 2FA thành công! Hãy lấy mã QR và cấu hình ứng dụng Authenticator.",
+                    IsEnabled = true
                 };
-
-            // Tự động toggle trạng thái 2FA
-            bool newStatus = !user.TwoFactorEnabled;
-            await _userManager.SetTwoFactorEnabledAsync(user, newStatus);
-
-            // Nếu tắt 2FA thì xóa secret key
-            if (!newStatus)
+            }
+            else
             {
+                // Tắt 2FA
+                if (!user.TwoFactorEnabled)
+                {
+                    return new Toggle2FAResponseDto
+                    {
+                        Success = true,
+                        Message = "2FA đã được tắt từ trước",
+                        IsEnabled = false
+                    };
+                }
+
+                // Tắt 2FA và xóa secret key
+                await _userManager.SetTwoFactorEnabledAsync(user, false);
                 user.TwoFactorSecretKey = null;
                 await _userManager.UpdateAsync(user);
-            }
 
-            return new Toggle2FAResponseDto
-            {
-                Success = true,
-                Message = newStatus ?
-                    "Đã bật 2FA thành công! Tài khoản của bạn giờ đây an toàn hơn." :
-                    "Đã tắt 2FA thành công.",
-                IsEnabled = newStatus
-            };
+                return new Toggle2FAResponseDto
+                {
+                    Success = true,
+                    Message = "Đã tắt 2FA thành công.",
+                    IsEnabled = false
+                };
+            }
         }
 
         public async Task<bool> VerifyEmailOtpAsync(string email, string token)
