@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Swashbuckle.AspNetCore.SwaggerGen;
 using System.Security.Claims;
 using System.Text;
 
@@ -136,18 +137,17 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// === 8. Add Swagger with JWT Support ===
+// === 8. Add Swagger with Enhanced Documentation ===
 builder.Services.AddSwaggerGen(options =>
 {
     options.SwaggerDoc("v1", new OpenApiInfo
     {
         Version = "v1",
         Title = "Authentication 2FA API",
-        Description = "API hỗ trợ đăng ký, đăng nhập với Google Authenticator 2FA và JWT Token",
         Contact = new OpenApiContact
         {
-            Name = "Support",
-            Email = "support@example.com"
+            Name = "Development Team",
+            Email = "dev@company.com"
         }
     });
 
@@ -162,7 +162,13 @@ builder.Services.AddSwaggerGen(options =>
         Scheme = "Bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
-        Description = "Nhập JWT token vào đây. Ví dụ: eyJhbGciOiJIUzI1NiIs..."
+        Description = @"**Cách sử dụng JWT Token:**
+1. Đăng nhập để lấy token từ response
+2. Copy token (bỏ qua 'Bearer ' nếu có)  
+3. Paste vào ô bên dưới
+4. Nhấn 'Authorize' 
+
+**Ví dụ token:** eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
     });
 
     options.AddSecurityRequirement(new OpenApiSecurityRequirement
@@ -198,16 +204,25 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI(c =>
     {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Auth 2FA API V1");
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Auth 2FA API V1 - Optimized");
         c.RoutePrefix = string.Empty; // Mở Swagger UI tại "/"
         c.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.None);
+        c.DefaultModelRendering(Swashbuckle.AspNetCore.SwaggerUI.ModelRendering.Model);
+        c.EnableDeepLinking();
+        c.ShowExtensions();
     });
 }
 
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
-app.UseAuthentication(); // Phải đặt trước UseAuthorization
+app.UseAuthentication(); 
 app.UseAuthorization();
 app.MapControllers();
+
+// Display startup info
+Console.WriteLine("=== Auth 2FA API Started ===");
+Console.WriteLine($"Environment: {app.Environment.EnvironmentName}");
+Console.WriteLine($"Swagger UI: {(app.Environment.IsDevelopment() ? "http://localhost:5128" : "Disabled in production")}");
+Console.WriteLine("============================");
 
 app.Run();

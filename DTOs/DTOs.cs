@@ -58,11 +58,12 @@ namespace Login.Models.DTOs
         public string Message { get; set; } = string.Empty;
     }
 
-    // DTO cho toggle 2FA (chỉ cần chọn bật/tắt)
+    // DTO cho toggle 2FA - Chỉ cần mã OTP để xác thực
     public class Toggle2FADto
     {
-        [Required(ErrorMessage = "Vui lòng chọn bật hoặc tắt 2FA")]
-        public bool Enable { get; set; }
+        [Required(ErrorMessage = "Mã OTP từ ứng dụng Authenticator là bắt buộc")]
+        [StringLength(6, MinimumLength = 6, ErrorMessage = "Mã OTP phải có 6 số")]
+        public string OtpCode { get; set; } = string.Empty;
     }
 
     // Response DTO cho toggle 2FA

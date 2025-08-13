@@ -132,11 +132,11 @@ namespace Login.Controllers
         }
 
         /// <summary>
-        /// Lấy mã QR để cấu hình 2FA trên ứng dụng Authenticator
+        /// Lấy mã QR để cấu hình 2FA trên ứng dụng Authenticator (QR code cố định cho mỗi tài khoản)
         /// </summary>
         [Authorize]
         [HttpGet("get-2fa-qr")]
-        [SwaggerOperation(Summary = "Lấy mã QR cấu hình 2FA")]
+        [SwaggerOperation(Summary = "Lấy mã QR cấu hình 2FA (QR code duy nhất và cố định cho tài khoản)")]
         [SwaggerResponse(200, "Mã QR để quét bằng ứng dụng Authenticator")]
         public async Task<IActionResult> Get2FAQRCode([FromQuery] bool returnBase64 = true)
         {
@@ -156,8 +156,9 @@ namespace Login.Controllers
                         Instructions = new
                         {
                             Step1 = "Cài đặt app Google Authenticator, Microsoft Authenticator hoặc tương tự",
-                            Step2 = "Quét mã QR code bên dưới bằng ứng dụng",
-                            Step3 = "Nhập mã 6 số từ ứng dụng vào API toggle-2fa để bật/tắt 2FA"
+                            Step2 = "Quét mã QR code bên dưới bằng ứng dụng (QR code này cố định cho tài khoản của bạn)",
+                            Step3 = "Nhập mã 6 số từ ứng dụng vào API toggle-2fa để bật/tắt 2FA",
+                            Note = "QR code này sẽ không thay đổi, bạn chỉ cần quét một lần duy nhất"
                         }
                     });
                 }
@@ -176,20 +177,20 @@ namespace Login.Controllers
         }
 
         /// <summary>
-        /// Bật hoặc tắt xác thực 2 yếu tố cho tài khoản
+        /// Bật hoặc tắt xác thực 2 yếu tố cho tài khoản (tự động toggle dựa trên trạng thái hiện tại)
         /// </summary>
         [Authorize]
         [HttpPost("toggle-2fa")]
-        [SwaggerOperation(Summary = "Bật hoặc tắt xác thực 2 yếu tố")]
+        [SwaggerOperation(Summary = "Bật/tắt xác thức 2 yếu tố (tự động toggle dựa trên trạng thái hiện tại)")]
         [SwaggerResponse(200, "Thay đổi cài đặt 2FA thành công")]
-        [SwaggerResponse(400, "Yêu cầu không hợp lệ")]
+        [SwaggerResponse(400, "Yêu cầu không hợp lệ hoặc mã OTP không đúng")]
         [SwaggerResponse(401, "Không có quyền truy cập - cần đăng nhập")]
         public async Task<IActionResult> Toggle2FA([FromBody] Toggle2FADto model)
         {
             try
             {
                 var userId = GetCurrentUserId();
-                var result = await _authService.Toggle2FAAsync(userId, model.Enable);
+                var result = await _authService.Toggle2FAAsync(userId, model.OtpCode);
 
                 if (!result.Success)
                     return BadRequest(new { Message = result.Message });

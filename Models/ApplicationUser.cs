@@ -2,13 +2,14 @@
 
 public class ApplicationUser : IdentityUser
 {
-    // Sử dụng TwoFactorEnabled có sẵn từ IdentityUser, không cần IsTwoFactorEnabled
-    // public bool IsTwoFactorEnabled { get; set; } // Xóa dòng này
+    // Không cần IsTwoFactorEnabled vì sử dụng TwoFactorEnabled có sẵn từ IdentityUser
 
     public string? AuthenticatorKey { get; set; }
     public DateTime? EmailConfirmationTokenExpiry { get; set; }
     public string? EmailOtpCode { get; set; }
     public DateTime? EmailOtpExpiry { get; set; }
+
+    // Secret key cho 2FA - giữ cố định để QR code không thay đổi
     public string? TwoFactorSecretKey { get; set; }
 
     // Additional properties

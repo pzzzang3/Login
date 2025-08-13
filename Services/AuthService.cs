@@ -112,7 +112,7 @@ namespace Login.Services
             };
         }
 
-        public async Task<Toggle2FAResponseDto> Toggle2FAAsync(string userId, bool enable)
+        public async Task<Toggle2FAResponseDto> Toggle2FAAsync(string userId, string otpCode)
         {
             var user = await _userManager.FindByIdAsync(userId);
             if (user == null)
@@ -122,60 +122,48 @@ namespace Login.Services
                     Message = "Không tìm thấy người dùng"
                 };
 
-            if (enable)
+            // Tạo secret key nếu chưa có (cần thiết để verify OTP)
+            if (string.IsNullOrEmpty(user.TwoFactorSecretKey))
             {
-                // Bật 2FA
-                // Kiểm tra xem đã bật chưa
-                if (user.TwoFactorEnabled)
-                {
-                    return new Toggle2FAResponseDto
-                    {
-                        Success = true,
-                        Message = "2FA đã được bật từ trước",
-                        IsEnabled = true
-                    };
-                }
+                var secret = KeyGeneration.GenerateRandomKey(20);
+                user.TwoFactorSecretKey = Base32Encoding.ToString(secret);
+                await _userManager.UpdateAsync(user);
+            }
 
-                // Tạo secret key nếu chưa có
-                if (string.IsNullOrEmpty(user.TwoFactorSecretKey))
+            // Xác thực mã OTP trước khi thực hiện toggle
+            if (!VerifyOtp(user.TwoFactorSecretKey, otpCode))
+            {
+                return new Toggle2FAResponseDto
                 {
-                    var secret = KeyGeneration.GenerateRandomKey(20);
-                    user.TwoFactorSecretKey = Base32Encoding.ToString(secret);
-                    await _userManager.UpdateAsync(user);
-                }
+                    Success = false,
+                    Message = "Mã OTP không hợp lệ. Vui lòng kiểm tra lại ứng dụng Authenticator."
+                };
+            }
 
+            // Toggle trạng thái 2FA (ngược lại với trạng thái hiện tại)
+            var newTwoFactorStatus = !user.TwoFactorEnabled;
+
+            if (newTwoFactorStatus)
+            {
                 // Bật 2FA
                 await _userManager.SetTwoFactorEnabledAsync(user, true);
 
                 return new Toggle2FAResponseDto
                 {
                     Success = true,
-                    Message = "Đã bật 2FA thành công! Hãy lấy mã QR và cấu hình ứng dụng Authenticator.",
+                    Message = "Đã bật 2FA thành công! Tài khoản của bạn giờ đây được bảo vệ tốt hơn.",
                     IsEnabled = true
                 };
             }
             else
             {
-                // Tắt 2FA
-                if (!user.TwoFactorEnabled)
-                {
-                    return new Toggle2FAResponseDto
-                    {
-                        Success = true,
-                        Message = "2FA đã được tắt từ trước",
-                        IsEnabled = false
-                    };
-                }
-
-                // Tắt 2FA và xóa secret key
+                // Tắt 2FA (không xóa secret key để giữ QR code cố định)
                 await _userManager.SetTwoFactorEnabledAsync(user, false);
-                user.TwoFactorSecretKey = null;
-                await _userManager.UpdateAsync(user);
 
                 return new Toggle2FAResponseDto
                 {
                     Success = true,
-                    Message = "Đã tắt 2FA thành công.",
+                    Message = "Đã tắt 2FA thành công. Khuyến nghị bật lại để tăng cường bảo mật.",
                     IsEnabled = false
                 };
             }
@@ -196,7 +184,7 @@ namespace Login.Services
             if (user == null)
                 throw new Exception("Không tìm thấy người dùng");
 
-            // Tạo secret key nếu chưa có
+            // Tạo secret key nếu chưa có (và giữ cố định cho tài khoản này)
             if (string.IsNullOrEmpty(user.TwoFactorSecretKey))
             {
                 var secret = KeyGeneration.GenerateRandomKey(20);
@@ -207,7 +195,7 @@ namespace Login.Services
             var appName = _configuration["AppName"] ?? "Auth2FA App";
             var qrCodeUrl = $"otpauth://totp/{Uri.EscapeDataString(appName)}:{Uri.EscapeDataString(email)}?secret={user.TwoFactorSecretKey}&issuer={Uri.EscapeDataString(appName)}";
 
-            // Tạo QR code dưới dạng base64
+            // Tạo QR code dưới dạng base64 (luôn giống nhau cho cùng một secret key)
             var qrCodeBase64 = await GenerateQRCodeBase64(qrCodeUrl);
 
             return new TwoFactorQRDto
@@ -220,10 +208,11 @@ namespace Login.Services
         {
             try
             {
-                // Sử dụng QRCoder để tạo QR code
+                // Sử dụng QRCoder để tạo QR code với cài đặt cố định
                 using var qrGenerator = new QRCoder.QRCodeGenerator();
                 var qrCodeData = qrGenerator.CreateQrCode(content, QRCoder.QRCodeGenerator.ECCLevel.Q);
                 using var qrCode = new QRCoder.PngByteQRCode(qrCodeData);
+                // Sử dụng cài đặt cố định để đảm bảo QR code giống nhau cho cùng content
                 var qrCodeBytes = qrCode.GetGraphic(20, new byte[] { 0, 0, 0 }, new byte[] { 255, 255, 255 });
                 return await Task.FromResult($"data:image/png;base64,{Convert.ToBase64String(qrCodeBytes)}");
             }
