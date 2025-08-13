@@ -53,6 +53,7 @@ namespace Login.Services
                 UserName = dto.Email,
                 Email = dto.Email,
                 TwoFactorEnabled = false,
+                IsTwoFactorEnabled = false,
                 FirstName = dto.FullName?.Split(' ').FirstOrDefault(),
                 LastName = dto.FullName?.Contains(' ') == true ?
                     string.Join(" ", dto.FullName.Split(' ').Skip(1)) : null,
@@ -183,7 +184,7 @@ namespace Login.Services
                 throw new Exception("Email hoặc mật khẩu không đúng.");
 
             // Nếu 2FA tắt → trả token luôn
-            if (!user.TwoFactorEnabled)
+            if (!user.IsTwoFactorEnabled)
             {
                 // Cập nhật thời gian đăng nhập cuối
                 user.LastLoginAt = DateTime.UtcNow;
@@ -309,25 +310,28 @@ namespace Login.Services
             }
 
             // Toggle trạng thái 2FA (ngược lại với trạng thái hiện tại)
-            var newTwoFactorStatus = !user.TwoFactorEnabled;
+            var newTwoFactorStatus = !user.IsTwoFactorEnabled;
 
             if (newTwoFactorStatus)
             {
                 // Bật 2FA
+                user.IsTwoFactorEnabled = true;
                 await _userManager.SetTwoFactorEnabledAsync(user, true);
-
+                await _userManager.UpdateAsync(user);
                 return new Toggle2FAResponseDto
                 {
                     Success = true,
                     Message = "Đã bật 2FA thành công! Tài khoản của bạn giờ đây được bảo vệ tốt hơn.",
                     IsEnabled = true
                 };
+
             }
             else
             {
                 // Tắt 2FA (không xóa secret key để giữ QR code cố định)
+                user.IsTwoFactorEnabled = false;
                 await _userManager.SetTwoFactorEnabledAsync(user, false);
-
+                await _userManager.UpdateAsync(user);
                 return new Toggle2FAResponseDto
                 {
                     Success = true,
@@ -387,7 +391,7 @@ namespace Login.Services
                 Email = user.Email,
                 FullName = $"{user.FirstName} {user.LastName}".Trim(),
                 PhoneNumber = user.PhoneNumber,
-                Is2FAEnabled = user.TwoFactorEnabled,
+                Is2FAEnabled = user.IsTwoFactorEnabled,
                 CreatedAt = user.CreatedAt,
                 LastLoginAt = user.LastLoginAt
             };

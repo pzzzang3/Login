@@ -2,7 +2,8 @@
 
 public class ApplicationUser : IdentityUser
 {
-    // Không cần IsTwoFactorEnabled vì sử dụng TwoFactorEnabled có sẵn từ IdentityUser
+    // Thuộc tính này cần khớp với database migration
+    public bool IsTwoFactorEnabled { get; set; }
 
     public string? AuthenticatorKey { get; set; }
     public DateTime? EmailConfirmationTokenExpiry { get; set; }
