@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.UI.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
@@ -119,6 +120,8 @@ builder.Services.AddAuthentication(options =>
 // === 4. Add Authorization ===
 builder.Services.AddAuthorization();
 
+builder.Services.AddScoped<IRoleService, RoleService>();
+
 // === 5. Add CORS (if needed for frontend) ===
 builder.Services.AddCors(options =>
 {
@@ -222,6 +225,12 @@ builder.Services.AddHostedService<SessionCleanupService>();
 
 var app = builder.Build();
 
+// Seed role khi chạy lần đầu
+using (var scope = app.Services.CreateScope())
+{
+    var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
+    await DataSeeder.SeedRolesAsync(roleManager);
+}
 // === Configure Pipeline ===
 if (app.Environment.IsDevelopment())
 {
