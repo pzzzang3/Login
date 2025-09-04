@@ -82,6 +82,7 @@ namespace Login.Services
             };
         }
 
+
         public async Task<VerifyEmailResponseDto> VerifyEmailAsync(VerifyEmailDto dto)
         {
             var user = await _userManager.FindByEmailAsync(dto.Email);
@@ -419,7 +420,7 @@ namespace Login.Services
                 <p><strong>Lưu ý:</strong> Mã này sẽ hết hạn sau 10 phút.</p>
                 <p>Nếu bạn không tạo tài khoản này, vui lòng bỏ qua email này.</p>
                 <br/>
-                <p>Trân trọng,<br/>Auth2FA App Team</p>
+                <p>Trân trọng,<br/>Nguyễn Th</p>
             ";
 
             try
@@ -443,6 +444,7 @@ namespace Login.Services
                 new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
                 new Claim("userId", user.Id),
                 new Claim("email", user.Email ?? string.Empty),
+                new Claim("EmailConfirmed", user.EmailConfirmed.ToString()),
                 new Claim(JwtRegisteredClaimNames.Sub, user.Id),
                 new Claim(JwtRegisteredClaimNames.Email, user.Email ?? string.Empty),
                 new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),

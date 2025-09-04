@@ -1,5 +1,6 @@
 using Login.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.UI.Services;
 using Microsoft.EntityFrameworkCore;
@@ -118,7 +119,17 @@ builder.Services.AddAuthentication(options =>
 });
 
 // === 4. Add Authorization ===
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    // Policy: chỉ HR mới được dùng
+    options.AddPolicy("RequireHR", policy =>
+        policy.RequireRole("HR"));
+
+    // Policy: user phải có email xác thực
+    options.AddPolicy("EmailVerified", policy =>
+        policy.RequireClaim("EmailConfirmed", "True"));
+});
+
 
 builder.Services.AddScoped<IRoleService, RoleService>();
 
@@ -136,6 +147,7 @@ builder.Services.AddCors(options =>
 // === 6. Add Dependency Injection for Services ===
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddSingleton<IAuthorizationHandler, JobOwnerHandler>();
 
 // Add EmailSender - Use Mock in Development if email settings are not configured
 var emailHost = builder.Configuration["EmailSettings:Host"];
